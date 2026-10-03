@@ -1,0 +1,6 @@
+{
+    "3d_strength": 1.0,
+    "maximum_disparity": 50,
+    "depth_inversion": false,
+    "temporal_smoothing": 0.7
+}

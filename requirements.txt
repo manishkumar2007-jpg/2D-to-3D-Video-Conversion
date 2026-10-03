@@ -1,0 +1,7 @@
+numpy
+opencv-python
+PySide6
+torch
+torchvision
+transformers
+pillow

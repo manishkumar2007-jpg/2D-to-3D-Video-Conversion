@@ -1,0 +1,21 @@
+1# Python virtual environment
+venv/
+.venv/
+
+# Python cache files
+__pycache__/
+*.pyc
+*.pyo
+
+# VS Code
+.vscode/
+
+# AI/model cache files
+.cache/
+huggingface/
+*.bin
+*.safetensors
+
+# OS-generated files
+.DS_Store
+Thumbs.db

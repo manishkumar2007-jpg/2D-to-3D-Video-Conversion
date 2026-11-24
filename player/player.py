@@ -22,18 +22,23 @@ from PySide6.QtWidgets import (
 from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput
 
 from core.depth_estimator import DepthEstimator
-from core.stereo import (
-    depth_to_disparity,
-    create_stereo_pair
-)
+from core.stereo import depth_to_disparity, create_stereo_pair
 from core.anaglyph import create_anaglyph
 from core.temporal_smoothing import TemporalSmoother
 from core.settings import load_settings
 
 
-# --------------------------------------------------
+# =========================================================
+# PROJECT PATHS
+# =========================================================
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+VIDEO_FOLDER = PROJECT_ROOT / "videos"
+
+
+# =========================================================
 # VIDEO PROCESSING THREAD
-# --------------------------------------------------
+# =========================================================
 
 class VideoProcessor(threading.Thread):
 
@@ -51,7 +56,7 @@ class VideoProcessor(threading.Thread):
         self.cap = cv2.VideoCapture(video_path)
 
         if not self.cap.isOpened():
-            raise RuntimeError("Unable to open video file.")
+            raise RuntimeError("Unable to open video.")
 
         self.fps = self.cap.get(cv2.CAP_PROP_FPS)
 
@@ -60,31 +65,29 @@ class VideoProcessor(threading.Thread):
 
         self.frame_duration = 1.0 / self.fps
 
-        self.total_frames = int(
-            self.cap.get(cv2.CAP_PROP_FRAME_COUNT)
+        self.settings = load_settings()
+
+        self.strength = float(
+            self.settings["3d_strength"]
         )
 
-        # Load existing settings
-        self.settings = load_settings("settings.json")
-
-        self.strength = self.settings.get("3d_strength", 1.0)
-
-        self.maximum_disparity = self.settings.get(
-            "maximum_disparity", 30
+        self.maximum_disparity = int(
+            self.settings["maximum_disparity"]
         )
 
-        self.depth_inversion = self.settings.get(
-            "depth_inversion", False
+        self.depth_inversion = bool(
+            self.settings["depth_inversion"]
         )
 
-        self.temporal_enabled = self.settings.get(
-            "temporal_smoothing", True
+        self.smoothing = float(
+            self.settings["temporal_smoothing"]
         )
 
-        # Initialize AI model
         self.estimator = DepthEstimator()
 
-        self.smoother = TemporalSmoother(alpha=0.7)
+        self.smoother = TemporalSmoother(
+            alpha=self.smoothing
+        )
 
     def run(self):
 
@@ -97,17 +100,18 @@ class VideoProcessor(threading.Thread):
                 if not ret:
                     break
 
-                # Reduce resolution for better CPU performance
-                frame = cv2.resize(frame, (640, 360))
+                frame = cv2.resize(
+                    frame,
+                    (640, 360)
+                )
 
                 # AI depth estimation
                 depth = self.estimator.estimate(frame)
 
                 # Temporal smoothing
-                if self.temporal_enabled:
-                    depth = self.smoother.apply(depth)
+                depth = self.smoother.apply(depth)
 
-                # Convert depth into disparity
+                # Depth to disparity
                 disparity = depth_to_disparity(
                     depth,
                     self.maximum_disparity,
@@ -115,17 +119,20 @@ class VideoProcessor(threading.Thread):
                     self.depth_inversion
                 )
 
-                # Generate stereo images
+                # Stereo generation
                 left, right = create_stereo_pair(
                     frame,
                     disparity
                 )
 
-                # Generate red-cyan anaglyph
-                output = create_anaglyph(left, right)
+                # Anaglyph generation
+                output = create_anaglyph(
+                    left,
+                    right
+                )
 
-                # Wait if the queue already contains a frame.
-                # IMPORTANT: We do not discard old frames.
+                # Wait until the display queue is empty.
+                # Do not discard processed frames.
                 while (
                     not self.stop_event.is_set()
                     and self.frame_queue.full()
@@ -137,9 +144,9 @@ class VideoProcessor(threading.Thread):
 
                 self.frame_queue.put(output)
 
-        except Exception as e:
+        except Exception as error:
 
-            self.error = str(e)
+            self.error = str(error)
 
         finally:
 
@@ -147,9 +154,9 @@ class VideoProcessor(threading.Thread):
             self.cap.release()
 
 
-# --------------------------------------------------
+# =========================================================
 # MAIN VIDEO PLAYER
-# --------------------------------------------------
+# =========================================================
 
 class VideoPlayer(QMainWindow):
 
@@ -172,13 +179,9 @@ class VideoPlayer(QMainWindow):
 
         self.next_frame_time = time.monotonic()
 
-        self.frame_duration = 1.0 / 30.0
-
-        self.last_frame = None
-
-        # ------------------------------------------
+        # -----------------------------------------
         # VIDEO PROCESSOR
-        # ------------------------------------------
+        # -----------------------------------------
 
         self.processor = VideoProcessor(
             video_path,
@@ -188,9 +191,9 @@ class VideoPlayer(QMainWindow):
 
         self.frame_duration = self.processor.frame_duration
 
-        # ------------------------------------------
+        # -----------------------------------------
         # AUDIO PLAYER
-        # ------------------------------------------
+        # -----------------------------------------
 
         self.audio_output = QAudioOutput()
 
@@ -208,9 +211,9 @@ class VideoPlayer(QMainWindow):
 
         self.audio_output.setVolume(1.0)
 
-        # ------------------------------------------
+        # -----------------------------------------
         # VIDEO DISPLAY
-        # ------------------------------------------
+        # -----------------------------------------
 
         self.video_label = QLabel()
 
@@ -224,21 +227,9 @@ class VideoPlayer(QMainWindow):
 
         self.video_label.setMinimumSize(640, 360)
 
-        # ------------------------------------------
-        # STATUS LABEL
-        # ------------------------------------------
-
-        self.status_label = QLabel(
-            "Initializing video..."
-        )
-
-        self.status_label.setAlignment(
-            Qt.AlignmentFlag.AlignCenter
-        )
-
-        # ------------------------------------------
-        # CONTROL BUTTONS
-        # ------------------------------------------
+        # -----------------------------------------
+        # BUTTONS
+        # -----------------------------------------
 
         self.pause_button = QPushButton("Pause")
 
@@ -257,25 +248,23 @@ class VideoPlayer(QMainWindow):
         button_layout.addWidget(self.pause_button)
         button_layout.addWidget(self.quit_button)
 
-        # ------------------------------------------
+        # -----------------------------------------
         # MAIN LAYOUT
-        # ------------------------------------------
+        # -----------------------------------------
 
         layout = QVBoxLayout()
 
         layout.addWidget(self.video_label)
-        layout.addWidget(self.status_label)
         layout.addLayout(button_layout)
 
         container = QWidget()
-
         container.setLayout(layout)
 
         self.setCentralWidget(container)
 
-        # ------------------------------------------
+        # -----------------------------------------
         # KEYBOARD SHORTCUTS
-        # ------------------------------------------
+        # -----------------------------------------
 
         self.pause_shortcut = QShortcut(
             QKeySequence("Space"),
@@ -295,9 +284,9 @@ class VideoPlayer(QMainWindow):
             self.close
         )
 
-        # ------------------------------------------
+        # -----------------------------------------
         # TIMER
-        # ------------------------------------------
+        # -----------------------------------------
 
         self.timer = QTimer(self)
 
@@ -307,12 +296,11 @@ class VideoPlayer(QMainWindow):
 
         self.timer.start(5)
 
-        # Start processing
         self.processor.start()
 
-    # --------------------------------------------------
+    # =====================================================
     # DISPLAY FRAME
-    # --------------------------------------------------
+    # =====================================================
 
     def display_frame(self, frame):
 
@@ -343,84 +331,64 @@ class VideoPlayer(QMainWindow):
             )
         )
 
-    # --------------------------------------------------
+    # =====================================================
     # VIDEO AND AUDIO SYNCHRONIZATION
-    # --------------------------------------------------
+    # =====================================================
 
     def update_video(self):
 
         if not self.playing or self.closed:
             return
 
-        current_time = time.monotonic()
-
-        # Wait until the current frame's display interval ends
-        if current_time < self.next_frame_time:
+        if time.monotonic() < self.next_frame_time:
             return
 
-        # Check whether the next processed frame is ready
         try:
 
             frame = self.frame_queue.get_nowait()
 
         except queue.Empty:
 
-            # No next frame available:
-            # Pause audio so it cannot run ahead.
+            # Pause audio if the next frame is not ready
             if self.audio_started:
                 self.audio_player.pause()
 
-            # Check again shortly
             if self.processor.finished:
-
-                if self.processor.error:
-
-                    self.status_label.setText(
-                        "Processing error: " +
-                        self.processor.error
-                    )
-
-                else:
-
-                    self.status_label.setText(
-                        "Video playback completed."
-                    )
 
                 self.audio_player.stop()
                 self.timer.stop()
+
+                if self.processor.error:
+                    print(
+                        "Processing error:",
+                        self.processor.error
+                    )
 
                 return
 
             return
 
-        # ------------------------------------------
-        # A NEW FRAME IS READY
-        # ------------------------------------------
-
-        self.last_frame = frame
-
+        # Display next processed frame
         self.display_frame(frame)
 
         # Start or resume audio
         if not self.audio_started:
 
             self.audio_player.play()
-
             self.audio_started = True
 
         else:
 
             self.audio_player.play()
 
-        # Schedule the next frame
+        # Schedule next frame
         self.next_frame_time = (
             time.monotonic() + self.frame_duration
         )
 
-
-    # --------------------------------------------------
+    # =====================================================
     # PAUSE / RESUME
-    # --------------------------------------------------
+    # =====================================================
 
     def toggle_playback(self):
 
@@ -435,7 +403,6 @@ class VideoPlayer(QMainWindow):
 
             self.pause_button.setText("Resume")
 
-
         else:
 
             self.playing = True
@@ -444,9 +411,9 @@ class VideoPlayer(QMainWindow):
 
             self.pause_button.setText("Pause")
 
-    # --------------------------------------------------
-    # WINDOW CLOSE / QUIT
-    # --------------------------------------------------
+    # =====================================================
+    # CLOSE PLAYER
+    # =====================================================
 
     def closeEvent(self, event):
 
@@ -459,41 +426,32 @@ class VideoPlayer(QMainWindow):
         self.stop_event.set()
 
         if self.processor.is_alive():
-
             self.processor.join(timeout=2)
 
         event.accept()
 
 
-# --------------------------------------------------
+# =========================================================
 # APPLICATION START
-# --------------------------------------------------
+# =========================================================
 
 if __name__ == "__main__":
 
     app = QApplication(sys.argv)
 
-    video_path = None
+    VIDEO_FOLDER.mkdir(
+        parents=True,
+        exist_ok=True
+    )
 
-    # Allow video path through terminal argument
-    if len(sys.argv) > 1:
+    video_path, _ = QFileDialog.getOpenFileName(
+        None,
+        "Select Video",
+        str(VIDEO_FOLDER),
+        "Video Files (*.mp4 *.avi *.mkv *.mov)"
+    )
 
-        video_path = sys.argv[1]
-
-    else:
-
-       from pathlib import Path
-
-       video_folder = Path(__file__).resolve().parent.parent / "videos"
-
-       video_path, _ = QFileDialog.getOpenFileName(
-          None,
-          "Select Video",
-          str(video_folder),
-          "Video Files (*.mp4 *.avi *.mkv *.mov)"
-        )
     if not video_path:
-
         sys.exit(0)
 
     try:
@@ -504,8 +462,7 @@ if __name__ == "__main__":
 
         sys.exit(app.exec())
 
-    except Exception as e:
+    except Exception as error:
 
-        print("Player Error:", e)
-
+        print("Player Error:", error)
         sys.exit(1)
